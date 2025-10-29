@@ -2,51 +2,75 @@
 # Licensed under the MIT License.
 
 import argparse
+import os
 from pathlib import Path
 from typing import Optional
 
+from ..backends import CCFBackend, BlobStorageBackend, ContractBackend
 from ..client import Client
-from ..verify import StaticTrustStore, verify_contract_receipt, verify_receipt
 from .client_arguments import add_client_arguments, create_client
-from ..crypto import parse_cose_sign
+
+
+def create_backend() -> ContractBackend:
+    """
+    Create the appropriate backend based on PYSCITT_BACKEND environment variable.
+
+    Returns:
+        A ContractBackend instance (CCFBackend or BlobStorageBackend)
+    """
+    backend_type = os.environ.get("PYSCITT_BACKEND", "ccf").lower()
+
+    if backend_type == "blob":
+        # Create blob storage backend
+        return BlobStorageBackend()
+    elif backend_type == "ccf":
+        # Create CCF backend - need to get client from args
+        # This will be passed in from the CLI
+        return None  # Placeholder, will be created in cli() function
+    else:
+        raise ValueError(
+            f"Unknown backend type: {backend_type}. "
+            f"Valid options are: 'ccf', 'blob'"
+        )
+
 
 def retrieve_signed_contracts(
-    client: Client,
+    backend: ContractBackend,
     base_path: Path,
     from_seqno: Optional[int],
     to_seqno: Optional[int],
     service_trust_store_path: Optional[Path],
     embed_receipt: Optional[bool] = False,
 ):
-    base_path.mkdir(parents=True, exist_ok=True)
+    """
+    Retrieve signed contracts using the specified backend.
 
-    if service_trust_store_path:
-        service_trust_store = StaticTrustStore.load(service_trust_store_path)
-    else:
-        service_trust_store = None
-
-    for tx in client.enumerate_claims(start=from_seqno, end=to_seqno):
-        claim = client.get_claim(tx, embed_receipt=embed_receipt)
-        path = base_path / f"{tx}.cose"
-        json_path = base_path /f"{tx}.json"
-
-        if service_trust_store and embed_receipt:
-            verify_contract_receipt(claim, service_trust_store=service_trust_store)
-
-        with open(path, "wb") as f:
-            f.write(claim)
-
-        _, payload, _ = parse_cose_sign(claim)
-        with open(json_path, "wb") as f:
-            f.write(payload)
+    Args:
+        backend: The backend to use for retrieving contracts
+        base_path: Directory to save retrieved contracts
+        from_seqno: Starting sequence number (optional)
+        to_seqno: Ending sequence number (optional)
+        service_trust_store_path: Path to trust store for verification (optional)
+        embed_receipt: Whether to embed receipts in COSE files (optional)
+    """
+    backend.retrieve_contracts(
+        base_path=base_path,
+        from_seqno=from_seqno,
+        to_seqno=to_seqno,
+        service_trust_store_path=service_trust_store_path,
+        embed_receipt=embed_receipt,
+    )
 
 def cli(fn):
     parser = fn(
-        description="Retrieve signed claimsets from a SCITT CCF Ledger together with receipts"
+        description="Retrieve signed contracts from SCITT storage (CCF Ledger or Azure Blob Storage)"
     )
+
+    # Add client arguments for CCF backend (optional if using blob backend)
     add_client_arguments(parser)
+
     parser.add_argument(
-        "path", type=Path, help="Folder to store signed claimsets and receipts"
+        "path", type=Path, help="Folder to store signed contracts and receipts"
     )
     parser.add_argument(
         "--from", dest="from_seqno", type=int, help="Start seqno (optional)"
@@ -67,9 +91,25 @@ def cli(fn):
     )
 
     def cmd(args):
-        client = create_client(args)
+        # Determine backend type from environment variable
+        backend_type = os.environ.get("PYSCITT_BACKEND", "ccf").lower()
+
+        if backend_type == "blob":
+            # Create blob storage backend
+            backend = BlobStorageBackend()
+        elif backend_type == "ccf":
+            # Create CCF backend with client
+            client = create_client(args)
+            backend = CCFBackend(client)
+        else:
+            raise ValueError(
+                f"Unknown backend type: {backend_type}. "
+                f"Valid options are: 'ccf', 'blob'. "
+                f"Set via PYSCITT_BACKEND environment variable."
+            )
+
         retrieve_signed_contracts(
-            client,
+            backend,
             args.path,
             args.from_seqno,
             args.to_seqno,
