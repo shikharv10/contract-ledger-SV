@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import argparse
+import logging
 import os
 from pathlib import Path
 from typing import Optional
@@ -10,6 +11,8 @@ from ..client import Client
 from ..verify import StaticTrustStore, verify_contract_receipt
 from .client_arguments import add_client_arguments, create_client
 from ..crypto import parse_cose_sign
+
+LOG = logging.getLogger(__name__)
 
 
 def retrieve_signed_contracts(
@@ -71,6 +74,8 @@ def retrieve_from_blob_storage(
     blob_service_client = BlobServiceClient(account_url=account_url, credential=account_key)
     container_client = blob_service_client.get_container_client(container_name)
 
+    LOG.info(f"Connected to Azure Blob Storage: {account_name}/{container_name}")
+
     base_path.mkdir(parents=True, exist_ok=True)
 
     # Load trust store if provided
@@ -86,6 +91,7 @@ def retrieve_from_blob_storage(
         trust_store_files = [b for b in blob_list if b.name.endswith(".did.json")]
 
         if trust_store_files:
+            LOG.info(f"Downloading {len(trust_store_files)} trust store files")
             trust_store_path.mkdir(parents=True, exist_ok=True)
             for blob in trust_store_files:
                 blob_client = container_client.get_blob_client(blob.name)
@@ -93,13 +99,18 @@ def retrieve_from_blob_storage(
                 filename = Path(blob.name).name
                 with open(trust_store_path / filename, "wb") as f:
                     f.write(download_stream.readall())
-    except (ResourceNotFoundError, AzureError):
-        pass  # Trust store is optional
+                LOG.debug(f"Downloaded trust store: {filename}")
+        else:
+            LOG.info("No trust store files found in blob storage")
+    except (ResourceNotFoundError, AzureError) as e:
+        LOG.info(f"Trust store not available: {e}")
 
     # Enumerate and download contracts
+    LOG.info("Enumerating contracts from blob storage")
     try:
         blob_list = container_client.list_blobs()
     except AzureError as e:
+        LOG.error(f"Failed to enumerate contracts: {e}")
         raise RuntimeError(f"Failed to enumerate contracts: {e}")
 
     # Filter for .cose files
@@ -119,10 +130,19 @@ def retrieve_from_blob_storage(
 
     # Sort and process contracts
     contract_ids.sort()
+
+    if not contract_ids:
+        LOG.warning("No contracts found matching criteria")
+        return
+
+    LOG.info(f"Found {len(contract_ids)} contracts to download")
+
+    downloaded = 0
     for _, contract_id in contract_ids:
         try:
             # Download contract
             blob_name = f"{contract_id}.cose"
+            LOG.debug(f"Downloading contract {contract_id}")
             try:
                 blob_client = container_client.get_blob_client(blob_name)
                 download_stream = blob_client.download_blob()
@@ -151,14 +171,22 @@ def retrieve_from_blob_storage(
                     json_path = base_path / f"{contract_id}.json"
                     with open(json_path, "wb") as f:
                         f.write(payload)
+                    downloaded += 1
+                    LOG.debug(f"Successfully processed contract {contract_id}")
+                else:
+                    LOG.warning(f"Contract {contract_id} has no payload")
             except Exception as e:
                 # Save error marker
+                LOG.error(f"Failed to parse COSE for contract {contract_id}: {e}")
                 error_path = base_path / f"{contract_id}.json.failed"
                 with open(error_path, "w") as f:
                     f.write(f"COSE parsing failed: {e}\n")
 
-        except Exception:
+        except Exception as e:
+            LOG.error(f"Failed to retrieve contract {contract_id}: {e}")
             continue  # Skip failed contracts
+
+    LOG.info(f"Successfully retrieved {downloaded}/{len(contract_ids)} contracts to {base_path}")
 
 
 def cli(fn):
