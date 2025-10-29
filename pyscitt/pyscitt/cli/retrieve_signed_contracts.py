@@ -73,6 +73,11 @@ def cli(fn):
         "path", type=Path, help="Folder to store signed contracts and receipts"
     )
     parser.add_argument(
+        "--contract-id",
+        type=int,
+        help="Retrieve a specific contract by ID (alternative to --from/--to)",
+    )
+    parser.add_argument(
         "--from", dest="from_seqno", type=int, help="Start seqno (optional)"
     )
     parser.add_argument("--to", dest="to_seqno", type=int, help="End seqno (optional)")
@@ -91,6 +96,19 @@ def cli(fn):
     )
 
     def cmd(args):
+        # Handle --contract-id as shorthand for --from X --to X
+        from_seqno = args.from_seqno
+        to_seqno = args.to_seqno
+
+        if args.contract_id is not None:
+            if from_seqno is not None or to_seqno is not None:
+                raise ValueError(
+                    "Cannot specify both --contract-id and --from/--to. "
+                    "Use --contract-id for a single contract, or --from/--to for a range."
+                )
+            from_seqno = args.contract_id
+            to_seqno = args.contract_id
+
         # Determine backend type from environment variable
         backend_type = os.environ.get("PYSCITT_BACKEND", "ccf").lower()
 
@@ -111,8 +129,8 @@ def cli(fn):
         retrieve_signed_contracts(
             backend,
             args.path,
-            args.from_seqno,
-            args.to_seqno,
+            from_seqno,
+            to_seqno,
             args.service_trust_store,
             args.embed_receipt,
         )

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional, Iterable
 
 from azure.storage.blob import BlobServiceClient
+from azure.core.exceptions import ResourceNotFoundError, AzureError
 from loguru import logger as LOG
 
 from .base import ContractBackend
@@ -93,7 +94,10 @@ class BlobStorageBackend(ContractBackend):
         LOG.info("Enumerating contracts from blob storage")
 
         # List all blobs with .cose extension
-        blob_list = self.container_client.list_blobs()
+        try:
+            blob_list = self.container_client.list_blobs()
+        except AzureError as e:
+            raise RuntimeError(f"Failed to enumerate contracts from blob storage: {e}")
 
         contract_ids = []
         for blob in blob_list:
@@ -133,18 +137,30 @@ class BlobStorageBackend(ContractBackend):
 
         Returns:
             The contract as bytes (COSE format)
+
+        Raises:
+            RuntimeError: If blob does not exist or download fails
         """
         if embed_receipt:
             LOG.warning(
-                "embed_receipt=True not fully supported for blob storage backend"
+                "embed_receipt=True not fully supported for blob storage backend. "
+                "Receipts may already be embedded in the stored COSE files."
             )
 
         blob_name = f"{contract_id}.cose"
         LOG.debug(f"Downloading blob: {blob_name}")
 
-        blob_client = self.container_client.get_blob_client(blob_name)
-        download_stream = blob_client.download_blob()
-        return download_stream.readall()
+        try:
+            blob_client = self.container_client.get_blob_client(blob_name)
+            download_stream = blob_client.download_blob()
+            return download_stream.readall()
+        except ResourceNotFoundError:
+            raise RuntimeError(
+                f"Contract {contract_id} not found in blob storage. "
+                f"Expected blob: {blob_name}"
+            )
+        except AzureError as e:
+            raise RuntimeError(f"Failed to download contract {contract_id}: {e}")
 
     def retrieve_contracts(
         self,
@@ -202,6 +218,10 @@ class BlobStorageBackend(ContractBackend):
                 try:
                     _, payload, _ = parse_cose_sign(claim)
 
+                    if payload is None:
+                        LOG.warning(f"Contract {contract_id} has no payload")
+                        continue
+
                     # Save JSON file with contract ID prefix
                     json_path = base_path / f"{contract_id}.json"
                     with open(json_path, "wb") as f:
@@ -210,6 +230,15 @@ class BlobStorageBackend(ContractBackend):
 
                 except Exception as e:
                     LOG.error(f"Failed to parse COSE for {contract_id}: {e}")
+                    # Save error marker file
+                    error_path = base_path / f"{contract_id}.json.failed"
+                    with open(error_path, "w") as f:
+                        f.write(
+                            f"COSE parsing failed for contract {contract_id}\n"
+                            f"Error: {e}\n"
+                            f"COSE file saved as: {contract_id}.cose\n"
+                        )
+                    LOG.warning(f"Created error marker: {error_path}")
 
             except Exception as e:
                 LOG.error(f"Failed to retrieve contract {contract_id}: {e}")
@@ -232,12 +261,23 @@ class BlobStorageBackend(ContractBackend):
                 name_starts_with="trust_store/"
             )
 
-            for blob in blob_list:
-                if blob.name.endswith(".did.json"):
-                    LOG.info(f"Downloading trust store file: {blob.name}")
+            # Check if any trust store files exist
+            trust_store_files = [b for b in blob_list if b.name.endswith(".did.json")]
 
-                    # Create trust_store directory if it doesn't exist
-                    trust_store_path.mkdir(parents=True, exist_ok=True)
+            if not trust_store_files:
+                LOG.info(
+                    "No trust store files found in blob storage "
+                    "(no *.did.json files in trust_store/ prefix)"
+                )
+                return
+
+            # Create trust_store directory
+            trust_store_path.mkdir(parents=True, exist_ok=True)
+
+            # Download each trust store file
+            for blob in trust_store_files:
+                try:
+                    LOG.info(f"Downloading trust store file: {blob.name}")
 
                     # Download the file
                     blob_client = self.container_client.get_blob_client(blob.name)
@@ -252,5 +292,15 @@ class BlobStorageBackend(ContractBackend):
 
                     LOG.debug(f"Saved trust store file to {file_path}")
 
-        except Exception as e:
-            LOG.warning(f"Could not download trust store files: {e}")
+                except AzureError as e:
+                    LOG.error(f"Failed to download trust store file {blob.name}: {e}")
+                    # Continue with other files
+
+        except ResourceNotFoundError:
+            LOG.info(
+                "No trust store found in blob storage "
+                "(trust_store/ prefix does not exist)"
+            )
+        except AzureError as e:
+            LOG.error(f"Failed to list trust store files: {e}")
+            # Non-fatal: continue without trust store
