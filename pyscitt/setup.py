@@ -34,7 +34,7 @@ setup(
         "azure-keyvault",
         "azure-identity",
         "azure-storage-blob",  # For blob storage backend
-        "loguru",  # For logging in backends
+        "loguru",  # For logging
     ],
     license="Apache License 2.0",
     author="SCITT CCF Team",
