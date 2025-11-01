@@ -33,6 +33,8 @@ setup(
         "pyjwt",
         "azure-keyvault",
         "azure-identity",
+        "azure-storage-blob>=12.0.0",
+        "loguru>=0.7.0",
     ],
     license="Apache License 2.0",
     author="SCITT CCF Team",
