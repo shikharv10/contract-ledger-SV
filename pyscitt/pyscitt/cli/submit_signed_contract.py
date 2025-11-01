@@ -2,12 +2,109 @@
 # Licensed under the MIT License.
 
 import argparse
+import os
 from pathlib import Path
 from typing import Optional
 
 from ..client import Client
 from ..verify import StaticTrustStore, verify_contract_receipt
 from .client_arguments import add_client_arguments, create_client
+
+
+def submit_to_blob_storage(path: Path, receipt_path: Optional[Path] = None) -> str:
+    """
+    Submit contract to Azure Blob Storage via Azure Function endpoint.
+
+    The Azure Function handles atomic sequence number assignment and storage.
+
+    Args:
+        path: Path to the .cose contract file
+        receipt_path: Optional path to write synthetic receipt (JSON format)
+
+    Returns:
+        str: The contract ID (e.g., "2.15")
+
+    Raises:
+        ValueError: If file extension is invalid or required env vars are missing
+        RuntimeError: If submission fails
+    """
+    try:
+        import httpx
+        from loguru import logger
+    except ImportError:
+        raise RuntimeError(
+            "Required dependencies not installed. "
+            "Install with: pip install httpx loguru"
+        )
+
+    import json
+    import time
+
+    # Validate file
+    if path.suffix != ".cose":
+        raise ValueError("unsupported file extension, expected .cose")
+
+    # Get configuration from environment
+    service_url = os.environ.get("PYSCITT_BLOB_SERVICE_URL")
+
+    if not service_url:
+        raise ValueError(
+            "Missing PYSCITT_BLOB_SERVICE_URL environment variable. "
+            "Set it to your Azure Function endpoint (e.g., https://myfunction.azurewebsites.net)"
+        )
+
+    logger.info(f"Submitting contract to blob storage via {service_url}")
+
+    # Read contract file
+    with open(path, "rb") as f:
+        contract_data = f.read()
+
+    # Submit to Azure Function endpoint
+    submit_url = f"{service_url.rstrip('/')}/api/submit"
+
+    try:
+        logger.debug(f"POST {submit_url}")
+        response = httpx.post(
+            submit_url,
+            content=contract_data,
+            headers={"Content-Type": "application/cose"},
+            timeout=30.0
+        )
+        response.raise_for_status()
+
+        result = response.json()
+        contract_id = result.get("entryId")
+
+        if not contract_id:
+            raise RuntimeError(f"Invalid response from blob storage service: {result}")
+
+        logger.info(f"Contract assigned ID: {contract_id}")
+
+    except httpx.HTTPError as e:
+        logger.error(f"Failed to submit contract: {e}")
+        raise RuntimeError(f"Contract submission failed: {e}")
+
+    # Print to stdout (user captures this)
+    print(f"Submitted {path} to blob storage as contract {contract_id}")
+
+    # Create synthetic receipt if requested
+    if receipt_path:
+        receipt_data = {
+            "contract_id": contract_id,
+            "timestamp": int(time.time()),
+            "backend": "blob_storage",
+            "service_url": service_url,
+            "note": "This is a synthetic receipt for training/demo purposes only. No cryptographic guarantees."
+        }
+        try:
+            with open(receipt_path, "w") as f:
+                json.dump(receipt_data, f, indent=2)
+            logger.info(f"Created synthetic receipt: {receipt_path}")
+            print(f"Created synthetic receipt at {receipt_path}")
+        except Exception as e:
+            logger.warning(f"Failed to create receipt file: {e}")
+
+    return contract_id
 
 
 def submit_signed_contract(
@@ -66,14 +163,26 @@ def cli(fn):
     )
 
     def cmd(args):
-        client = create_client(args)
-        submit_signed_contract(
-            client,
-            args.path,
-            args.receipt,
-            args.service_trust_store,
-            args.skip_confirmation,
-        )
+        backend = os.environ.get("PYSCITT_BACKEND", "ccf").lower()
+
+        if backend == "blob":
+            # Blob storage mode - submit via Azure Function endpoint
+            submit_to_blob_storage(args.path, args.receipt)
+        elif backend == "ccf":
+            # CCF mode - existing logic
+            client = create_client(args)
+            submit_signed_contract(
+                client,
+                args.path,
+                args.receipt,
+                args.service_trust_store,
+                args.skip_confirmation,
+            )
+        else:
+            raise ValueError(
+                f"Unknown backend: '{backend}'. "
+                "Set PYSCITT_BACKEND to 'ccf' or 'blob'"
+            )
 
     parser.set_defaults(func=cmd)
 
