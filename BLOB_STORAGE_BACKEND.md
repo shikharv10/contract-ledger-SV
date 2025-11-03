@@ -8,8 +8,8 @@ The SCITT contract ledger now supports two backends:
 
 | Backend | Use Case | Cost | Sequence Numbering | Receipts |
 |---------|----------|------|-------------------|----------|
-| **CCF** | Production | $1000-2000/month | Blockchain consensus | Cryptographic |
-| **Blob** | Training/Demo | ~$0.01/month | Atomic counter (blob lease) | Synthetic (JSON) |
+| **CCF** | Production | $1000-2000/month | Blockchain consensus | Cryptographic (CBOR) |
+| **Blob** | Training/Demo | ~$0.01/month | Atomic counter (blob lease) | Mock (CBOR structure, no crypto) |
 
 ## Architecture
 
@@ -122,8 +122,9 @@ Added dependencies:
 - Added `submit_to_blob_storage()` function
   - POSTs contract to Azure Function endpoint
   - Receives `entryId` (sequence number) in response
-  - Creates synthetic JSON receipt if `--receipt` provided
+  - Creates mock CBOR receipt if `--receipt` provided (proper structure, mock crypto)
 - Modified `cmd()` to route based on `PYSCITT_BACKEND` env var
+- Added static mock certificate for consistent testing
 
 **New function signature:**
 ```python
@@ -342,15 +343,60 @@ Contract 2.999 not found or download failed: The specified blob does not exist
 No contracts found matching the criteria
 ```
 
+## Mock Receipt Validation Workflow
+
+The blob storage backend now generates **mock CBOR receipts** with proper structure to enable testing of the validation workflow.
+
+### What's Included
+
+✅ **Proper Receipt Structure**: CBOR-encoded with protected headers and contents
+✅ **Service Parameters**: Mock trust store with service ID, algorithms, and certificate
+✅ **Workflow Testing**: Can run `validate-contract` command to test the flow
+❌ **Cryptographic Verification**: Signatures are mock (zero-filled), verification will fail
+
+### Usage Example
+
+```bash
+# 1. Submit with receipt
+export PYSCITT_BACKEND=blob
+scitt submit-signed-contract contract.cose --receipt contract.receipt.cbor
+
+# 2. Validate using mock trust store
+scitt validate-contract contract.cose \
+  --receipt contract.receipt.cbor \
+  --service-trust-store ./mock_trust_store
+```
+
+**Expected Result**: Receipt will parse correctly, but cryptographic verification will fail (intentionally). This allows testing the validation workflow without deploying CCF.
+
+### Mock Trust Store
+
+Located in `./mock_trust_store/`:
+- Contains service parameters matching blob storage mock receipts
+- Includes static mock X.509 certificate
+- See `mock_trust_store/README.md` for details
+
+### What This Tests
+
+✓ Receipt structure parsing (CBOR format)
+✓ Service trust store lookup
+✓ Protected header validation
+✓ Certificate loading and format
+✓ Command-line workflow integration
+✗ Cryptographic signature verification (expected to fail)
+
+This enables training on SCITT validation concepts without the cost and complexity of deploying CCF.
+
 ## Limitations
 
 ⚠️ **This is for TRAINING/DEMOS ONLY, not production use:**
 
-- **No cryptographic receipts**: Receipts are synthetic JSON, not cryptographic proofs
+- **No cryptographic security**: Receipts have proper structure but mock signatures
 - **No authentication**: Azure Function endpoint is publicly accessible
 - **No verification**: Trust the blob storage, not cryptography
 - **No consensus**: Single point of failure (blob storage)
 - **No audit trail**: Contracts can be deleted from blob storage
+- **Validation fails at crypto step**: Mock receipts won't pass signature verification
 
 For production, use CCF with proper authentication and cryptographic guarantees.
 
@@ -411,11 +457,11 @@ Blob mode doesn't validate contracts. For production:
 Potential improvements (not implemented):
 
 1. **Authentication**: Add API key or Azure AD auth to function
-2. **Receipts**: Generate CBOR receipts (without cryptographic proofs)
-3. **Validation**: Validate COSE structure before storage
-4. **Metrics**: Add Application Insights telemetry
-5. **Caching**: Cache frequently accessed contracts
-6. **Replication**: Geo-replicate blob storage for HA
+2. **Validation**: Validate COSE structure before storage
+3. **Metrics**: Add Application Insights telemetry
+4. **Caching**: Cache frequently accessed contracts
+5. **Replication**: Geo-replicate blob storage for HA
+6. **Real Cryptography**: Implement actual Merkle tree and signatures (essentially rebuilding parts of CCF)
 
 ## Support
 
