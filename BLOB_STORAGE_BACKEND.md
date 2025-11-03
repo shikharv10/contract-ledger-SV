@@ -178,6 +178,13 @@ export PYSCITT_BLOB_KEY=<storage-account-key>
 export PYSCITT_BLOB_CONTAINER=contracts
 ```
 
+**IMPORTANT for Demo Scripts:** If using `demo/contract/*.sh` or depa-training scripts, also set:
+```bash
+export CONTRACT_URL=https://myfunction.azurewebsites.net/api
+```
+
+⚠️ **Note the `/api/` suffix!** Azure Functions routes are under `/api/` by default. Demo scripts call `$CONTRACT_URL/parameters` which becomes `/api/parameters`.
+
 ### CCF Mode (Default)
 ```bash
 # Default mode (or explicitly set)
@@ -341,6 +348,74 @@ ValueError: Unknown backend: 'invalid'. Set PYSCITT_BACKEND to 'ccf' or 'blob'
 $ scitt retrieve-contracts ./output --contract-id 2.999
 Contract 2.999 not found or download failed: The specified blob does not exist
 No contracts found matching the criteria
+```
+
+## Azure Function Endpoints
+
+The Azure Function provides three HTTP endpoints:
+
+### POST /api/submit
+
+Submit a contract to blob storage with atomic sequence number assignment.
+
+**Request:**
+```
+POST /api/submit
+Content-Type: application/cose
+Body: [COSE contract binary data]
+```
+
+**Response:**
+```json
+{
+  "entryId": "2.15",
+  "sequenceNumber": 15,
+  "timestamp": 1730304000
+}
+```
+
+### GET /api/parameters
+
+Get mock service parameters for trust store setup.
+
+**Request:**
+```
+GET /api/parameters
+```
+
+**Response:**
+```json
+{
+  "serviceId": "mock-blob-storage-service",
+  "treeAlgorithm": "CCF",
+  "signatureAlgorithm": "ES256",
+  "serviceCertificate": "MIIDbTCCAlWgAwIBAgIU..."
+}
+```
+
+**Purpose:**
+- Required by `demo/contract/1-contract-setup.sh` for trust store creation
+- Required by `depa-training` resource provisioning scripts
+- Enables complete validation workflow testing
+- Returns static mock parameters matching mock trust store certificate
+
+**Usage:**
+```bash
+# Download parameters to create trust store
+mkdir -p tmp/trust_store
+curl -k -f https://myfunction.azurewebsites.net/api/parameters > tmp/trust_store/scitt.json
+```
+
+### GET /api/health
+
+Health check endpoint.
+
+**Response:**
+```json
+{
+  "status": "healthy",
+  "container": "contracts"
+}
 ```
 
 ## Mock Receipt Validation Workflow
