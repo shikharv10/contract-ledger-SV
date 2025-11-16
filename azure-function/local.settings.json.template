@@ -1,0 +1,11 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "PYSCITT_BACKEND": "blob",
+    "PYSCITT_BLOB_ACCOUNT": "YOUR_STORAGE_ACCOUNT_NAME",
+    "PYSCITT_BLOB_KEY": "YOUR_STORAGE_ACCOUNT_KEY",
+    "PYSCITT_BLOB_CONTAINER": "contracts"
+  }
+}

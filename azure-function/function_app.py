@@ -306,3 +306,8 @@ def health_check(req: func.HttpRequest) -> func.HttpResponse:
         status_code=200,
         mimetype="application/json"
     )
+
+@app.route(route="entries/{seqno}", methods=["GET"])
+def get_contract(req: func.HttpRequest) -> func.HttpResponse:
+    from contract_service.get_contract import main as get_contract_main
+    return get_contract_main(req)

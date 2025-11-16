@@ -1,0 +1,62 @@
+import azure.functions as func
+import json
+import os
+from azure.storage.blob import BlobServiceClient
+
+def main(req: func.HttpRequest) -> func.HttpResponse:
+    try:
+        seqno = req.route_params.get('seqno')
+        
+        if not seqno:
+            return func.HttpResponse(
+                json.dumps({"error": "Missing seqno"}),
+                status_code=400,
+                mimetype='application/json'
+            )
+        
+        backend = os.environ.get('PYSCITT_BACKEND', 'mock')
+        
+        if backend != 'blob':
+            return func.HttpResponse(
+                json.dumps({"error": f"Backend is {backend}, not blob"}),
+                status_code=500,
+                mimetype='application/json'
+            )
+        
+        account_name = os.environ.get('PYSCITT_BLOB_ACCOUNT')
+        account_key = os.environ.get('PYSCITT_BLOB_KEY')
+        container_name = os.environ.get('PYSCITT_BLOB_CONTAINER', 'contracts')
+        
+        if not account_name or not account_key:
+            return func.HttpResponse(
+                json.dumps({"error": "Missing credentials"}),
+                status_code=500,
+                mimetype='application/json'
+            )
+        
+        blob_service_client = BlobServiceClient(
+            account_url=f"https://{account_name}.blob.core.windows.net",
+            credential=account_key
+        )
+        
+        blob_name = f"2.{seqno}.cose"
+        blob_client = blob_service_client.get_blob_client(
+            container=container_name,
+            blob=blob_name
+        )
+        
+        contract_data = blob_client.download_blob().readall()
+        
+        return func.HttpResponse(
+            contract_data,
+            status_code=200,
+            mimetype='application/cose'
+        )
+        
+    except Exception as e:
+        import traceback
+        return func.HttpResponse(
+            json.dumps({"error": str(e), "trace": traceback.format_exc()}),
+            status_code=500,
+            mimetype='application/json'
+        )
